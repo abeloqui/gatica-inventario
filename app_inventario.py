@@ -3,6 +3,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime
+import pytz  # Librería para manejar zonas horarias
+
+# 0. CONFIGURACIÓN DE ZONA HORARIA
+zona_horaria = pytz.timezone('America/Argentina/Buenos_Aires') # GMT-3
 
 # 1. CONFIGURACIÓN DE PÁGINA
 st.set_page_config(page_title="Gatica Food - Inventario", page_icon="📦", layout="wide")
@@ -21,7 +25,6 @@ st.markdown("""
     [data-testid="stMetricLabel"] { color: #31333F !important; font-weight: bold !important; }
     [data-testid="stMetricValue"] { color: #1a1c23 !important; }
     div.stButton > button:first-child { width: 100%; border-radius: 10px; height: 3.5em; font-weight: bold; }
-    .st-emotion-cache-12w04p9 { font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -42,7 +45,7 @@ def get_all_sheets():
         st.error(f"Error de autenticación: {e}")
         return None
 
-# 4. PANEL LATERAL (Filtros)
+# 4. PANEL LATERAL
 with st.sidebar:
     st.title("🍔 Gatica Food")
     st.subheader("Panel de Control")
@@ -65,7 +68,7 @@ if diccionario_hojas:
             clean_values = [row[:5] for row in values]
             df_raw = pd.DataFrame(clean_values[1:], columns=[c.strip() for c in clean_values[0]])
             
-            # Normalización de columnas
+            # Normalización
             df_raw.columns = [c.replace('í', 'i').replace('ó', 'o').strip().lower() for c in df_raw.columns]
             column_map = {'categoria': 'Categoría', 'producto': 'Producto', 'stock actual': 'Stock Actual', 'stock minimo': 'Stock Mínimo', 'estado': 'Estado'}
             df_raw = df_raw.rename(columns=column_map)
@@ -83,22 +86,22 @@ else:
 # 6. INTERFAZ PRINCIPAL
 st.title(f"📦 Inventario: {sector_seleccionado}")
 
+# Obtener hora actual en GMT-3
+ahora_gmt3 = datetime.now(zona_horaria)
+
 if not df_raw.empty:
     # --- MÉTRICAS ---
     t1, t2, t3 = st.columns(3)
     t1.metric("Productos Total", len(df_raw))
     alertas_df = df_raw[df_raw['Stock Actual'] < df_raw['Stock Mínimo']]
     t2.metric("Alertas Críticas", len(alertas_df), delta=len(alertas_df), delta_color="inverse")
-    t3.metric("Última Sincronización", datetime.now().strftime('%H:%M'))
+    t3.metric("Sincronizado (GMT-3)", ahora_gmt3.strftime('%H:%M'))
 
-    # --- GRÁFICA DE BARRAS (NUEVO) ---
+    # --- GRÁFICA DE BARRAS ---
     with st.expander("📊 Visualización de Stock Crítico", expanded=True):
-        # Filtramos para mostrar los 15 productos con menos stock relativo
         df_plot = df_raw.copy()
         df_plot['Disponibilidad'] = df_plot['Stock Actual'] - df_plot['Stock Mínimo']
         df_plot = df_plot.sort_values(by='Disponibilidad').head(15)
-        
-        # Gráfica comparativa: Stock Actual vs Mínimo
         st.bar_chart(df_plot.set_index('Producto')[['Stock Actual', 'Stock Mínimo']])
 
     # --- TABLA DE DATOS ---
@@ -113,7 +116,7 @@ if not df_raw.empty:
 
     st.divider()
 
-    # 7. ACCIONES (EDITAR Y NUEVO)
+    # 7. ACCIONES
     col_edit, col_new = st.columns(2)
 
     with col_edit:
@@ -121,7 +124,6 @@ if not df_raw.empty:
             st.subheader("📝 Editar / Eliminar")
             prod_nombres = df_raw['Producto'].tolist()
             mapa_filas = {nombre: idx + 2 for idx, nombre in enumerate(prod_nombres)}
-            
             prod_sel = st.selectbox("Seleccionar para modificar", prod_nombres, key="edit_box")
             
             if prod_sel:
@@ -135,7 +137,6 @@ if not df_raw.empty:
                 if c_up.button("Actualizar Stock", type="primary"):
                     with st.spinner("Guardando..."):
                         nuevo_estado = "🚨 BAJO" if n_stock < n_min else "✅ OK"
-                        # Actualización optimizada de rango (Columnas C a E)
                         sheet.update(range_name=f'C{row_idx}:E{row_idx}', 
                                      values=[[n_stock, n_min, nuevo_estado]])
                         st.toast(f"Actualizado: {prod_sel}", icon="✅")
@@ -172,4 +173,4 @@ if not df_raw.empty:
 else:
     st.info(f"La hoja '{sector_seleccionado}' no tiene datos.")
 
-st.sidebar.caption(f"Gatica Food v2.5 | {datetime.now().year}")
+st.sidebar.caption(f"Gatica Food v2.6 | {ahora_gmt3.year} | {ahora_gmt3.strftime('%d/%m/%Y %H:%M')}")
