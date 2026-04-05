@@ -11,27 +11,52 @@ st.set_page_config(
     layout="wide", # Crucial para el responsive en escritorio
 )
 
-# CSS Personalizado para mejorar el aspecto de las tarjetas y botones
-# CSS Personalizado corregido
+# CSS Mejorado para visibilidad total
 st.markdown("""
     <style>
+    /* Fondo general de la página */
     .main {
-        background-color: #f8f9fa;
+        background-color: #f0f2f6;
     }
+    
+    /* Tarjetas de Métricas */
     [data-testid="stMetric"] {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        border: 1px solid #eee;
+        background-color: #ffffff !important;
+        padding: 20px !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
+        border: 1px solid #e0e0e0 !important;
     }
+
+    /* FORZAR COLOR DE TEXTO EN MÉTRICAS (Para que no se vea blanco sobre blanco) */
+    [data-testid="stMetricLabel"] {
+        color: #31333F !important; /* Gris oscuro para el título */
+        font-weight: bold !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #1a1c23 !important; /* Casi negro para el número */
+    }
+    
+    /* Botones más grandes para dedos en celular */
     div.stButton > button:first-child {
         width: 100%;
-        border-radius: 8px;
-        height: 3em;
+        border-radius: 10px;
+        height: 3.5em;
+        font-weight: bold;
+        background-color: #ff4b4b;
+        color: white;
+    }
+
+    /* Ajuste para que las columnas no se amontonen en móvil */
+    @media (max-width: 640px) {
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            margin-bottom: 10px;
+        }
     }
     </style>
-    """, unsafe_allow_html=True) # <--- EL CAMBIO ESTÁ AQUÍ
+    """, unsafe_allow_html=True)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
