@@ -11,34 +11,7 @@ st.set_page_config(
     layout="wide", # Crucial para el responsive en escritorio
 )
 
-# Modificamos la conexión para traer ambas hojas
-@st.cache_resource
-def get_all_sheets():
-    creds = Credentials.from_service_account_info(st.secrets["gsheets"], scopes=SCOPES)
-    client = gspread.authorize(creds)
-    spreadsheet = client.open_by_key("19M-Tn7cYH4UmuKBZHxVqZhkI7RAGsxwdq2RP8xp5JFU")
-    
-    # Retornamos un diccionario con las dos hojas
-    return {
-        "General": spreadsheet.get_worksheet(0), # La primera pestaña
-        "Cocina": spreadsheet.worksheet("Cocina") # La pestaña nueva por nombre
-    }
 
-# Intentar conectar
-try:
-    diccionario_hojas = get_all_sheets()
-except Exception as e:
-    st.error(f"Error de conexión: {e}")
-    st.stop()
-
-# Selector de Inventario en el Sidebar
-with st.sidebar:
-    st.title("📂 Inventario")
-    sector_seleccionado = st.selectbox("Seleccionar Sector", ["General", "Cocina"])
-    st.divider()
-
-# Ahora 'sheet' será la que elijas en el selector
-sheet = diccionario_hojas[sector_seleccionado]
 
 # CSS Mejorado para visibilidad total
 st.markdown("""
@@ -123,6 +96,35 @@ def cargar_datos():
 df_raw = cargar_datos()
 
 # --- SIDEBAR (Filtros Móviles) ---
+
+# Modificamos la conexión para traer ambas hojas
+@st.cache_resource
+def get_all_sheets():
+    creds = Credentials.from_service_account_info(st.secrets["gsheets"], scopes=SCOPES)
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_key("19M-Tn7cYH4UmuKBZHxVqZhkI7RAGsxwdq2RP8xp5JFU")
+    
+    # Retornamos un diccionario con las dos hojas
+    return {
+        "General": spreadsheet.get_worksheet(0), # La primera pestaña
+        "Cocina": spreadsheet.worksheet("Cocina") # La pestaña nueva por nombre
+    }
+
+# Intentar conectar
+try:
+    diccionario_hojas = get_all_sheets()
+except Exception as e:
+    st.error(f"Error de conexión: {e}")
+    st.stop()
+
+# Selector de Inventario en el Sidebar
+with st.sidebar:
+    st.title("📂 Inventario")
+    sector_seleccionado = st.selectbox("Seleccionar Sector", ["General", "Cocina"])
+    st.divider()
+
+# Ahora 'sheet' será la que elijas en el selector
+sheet = diccionario_hojas[sector_seleccionado]
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/4043/4043231.png", width=100)
     st.title("Filtros")
