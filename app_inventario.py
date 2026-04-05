@@ -10,6 +10,19 @@ st.set_page_config(
     page_icon="📦",
     layout="wide", # Crucial para el responsive en escritorio
 )
+# Dentro del cuerpo principal de tu app
+st.subheader(f"Estado del Inventario - {sector_seleccionado}")
+
+if not df_display.empty:
+    st.dataframe(
+        df_display, 
+        width="stretch",  # Actualizado aquí
+        hide_index=True,
+        column_config={
+            "Stock Actual": st.column_config.NumberColumn(format="%d 📦"),
+            "Estado": st.column_config.TextColumn("Status")
+        }
+    )
 
 
 
