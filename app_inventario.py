@@ -4,6 +4,20 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime
 
+# DEFINIR LOS SCOPES ES OBLIGATORIO
+scopes = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+def get_sheet():
+    # Cargar credenciales desde Streamlit Secrets
+    creds = Credentials.from_service_account_info(
+        st.secrets["gsheets"], 
+        scopes=scopes  # <--- ESTO ES LO QUE SUELE FALTAR
+    )
+    client = gspread.authorize(creds)
+
 st.set_page_config(page_title="Gatica Food - Inventario", layout="wide")
 
 st.title("📦 Inventario Gatica Food")
