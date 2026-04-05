@@ -4,152 +4,147 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime
 
-# 1. DEFINIR SCOPES (Indispensable para evitar el RefreshError)
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
+# 1. CONFIGURACIÓN Y ESTILO
+st.set_page_config(
+    page_title="Gatica Food - Panel de Control",
+    page_icon="📦",
+    layout="wide", # Crucial para el responsive en escritorio
+)
 
-st.set_page_config(page_title="Gatica Food - Inventario", layout="wide")
+# CSS Personalizado para mejorar el aspecto de las tarjetas y botones
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f8f9fa;
+    }
+    .stMetric {
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    div.stButton > button:first-child {
+        width: 100%;
+        border-radius: 8px;
+    }
+    </style>
+    """, unsafe_allow_status_code=True)
 
-# 2. FUNCIÓN DE CONEXIÓN ÚNICA Y CACHEADA
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
 @st.cache_resource
 def get_sheet():
-    # Cargamos desde st.secrets["gsheets"] y LE PASAMOS LOS SCOPES
-    creds = Credentials.from_service_account_info(
-        st.secrets["gsheets"],
-        scopes=SCOPES
-    )
+    creds = Credentials.from_service_account_info(st.secrets["gsheets"], scopes=SCOPES)
     client = gspread.authorize(creds)
-    # Usamos tu ID de hoja
     spreadsheet = client.open_by_key("19M-Tn7cYH4UmuKBZHxVqZhkI7RAGsxwdq2RP8xp5JFU")
     return spreadsheet.sheet1
 
-# Inicializar la hoja
 try:
     sheet = get_sheet()
 except Exception as e:
-    st.error(f"Error de conexión: {e}")
+    st.error(f"⚠️ Error de conexión: {e}")
     st.stop()
-
-st.title("📦 Inventario Gatica Food")
 
 def cargar_datos():
     values = sheet.get_all_values()
-    if not values or len(values) < 1:
-        return pd.DataFrame()
-    
-    # Solo tomamos las primeras 5 columnas para evitar errores
+    if not values or len(values) < 1: return pd.DataFrame()
     clean_values = [row[:5] for row in values]
-    headers = [col.strip() for col in clean_values[0]]
-    df = pd.DataFrame(clean_values[1:], columns=headers)
-
-    # Normalizar nombres de columnas
-    column_map = {}
-    for col in df.columns:
-        col_clean = col.strip().lower()
-        if col_clean in ['categoría', 'categoria']:
-            column_map[col] = 'Categoría'
-        elif col_clean in ['producto']:
-            column_map[col] = 'Producto'
-        elif col_clean in ['stock actual']:
-            column_map[col] = 'Stock Actual'
-        elif col_clean in ['stock mínimo', 'stock minimo']:
-            column_map[col] = 'Stock Mínimo'
-
+    df = pd.DataFrame(clean_values[1:], columns=[c.strip() for c in clean_values[0]])
+    
+    # Normalización prolija
+    df.columns = [c.replace('í', 'i').replace('ó', 'o').strip().lower() for c in df.columns]
+    column_map = {
+        'categoria': 'Categoría', 'producto': 'Producto', 
+        'stock actual': 'Stock Actual', 'stock minimo': 'Stock Mínimo', 'estado': 'Estado'
+    }
     df = df.rename(columns=column_map)
-
-    # Convertir a números
     for col in ['Stock Actual', 'Stock Mínimo']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
     return df
 
-# --- SIDEBAR ---
-st.sidebar.header("Opciones")
-mostrar_solo_bajos = st.sidebar.checkbox("Mostrar solo 🚨 BAJO", value=False)
-busqueda = st.sidebar.text_input("Buscar producto", "")
+# --- PROCESAMIENTO DE DATOS ---
+df_raw = cargar_datos()
 
-# Carga inicial de datos
-df = cargar_datos()
+# --- SIDEBAR (Filtros Móviles) ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/4043/4043231.png", width=100)
+    st.title("Filtros")
+    busqueda = st.text_input("🔍 Buscar Producto", "")
+    solo_bajos = st.toggle("🚨 Solo alertas de Stock", value=False)
+    st.divider()
+    if st.button("🔄 Refrescar Datos"):
+        st.cache_resource.clear()
+        st.rerun()
 
-# Aplicar filtros
-if not df.empty:
-    if busqueda:
-        df = df[df['Producto'].str.contains(busqueda, case=False, na=False)]
+# --- DASHBOARD PRINCIPAL ---
+st.title("📦 Sistema de Inventario")
 
-    if mostrar_solo_bajos:
-        if 'Stock Actual' in df.columns and 'Stock Mínimo' in df.columns:
-            df = df[df['Stock Actual'] < df['Stock Mínimo']]
-
-# --- CUERPO PRINCIPAL ---
-st.subheader("Estado del Inventario")
-if not df.empty:
-    st.dataframe(
-        df,
-        use_container_width=True,
-        height=400,
-        hide_index=True
-    )
-else:
-    st.warning("No se encontraron datos en la hoja o los filtros no coinciden.")
-
-# --- ACTUALIZAR STOCK ---
-st.divider()
-st.subheader("🔄 Actualizar Stock")
-if not df.empty:
-    # Usamos una clave única para el selectbox
-    producto_sel = st.selectbox("Seleccioná el producto para editar", df['Producto'].tolist(), key="editor_stock")
-    if producto_sel:
-        fila = df[df['Producto'] == producto_sel].iloc[0]
-        
-        col_edit1, col_edit2 = st.columns(2)
-        with col_edit1:
-            nuevo_stock = st.number_input("Nuevo Stock Actual", min_value=0, value=int(fila['Stock Actual']))
-        
-        if st.button("Guardar Cambio", type="primary"):
-            try:
-                # Buscar por nombre de producto en la columna B (índice 2)
-                cell = sheet.find(producto_sel, in_column=2)
-                row_num = cell.row
-                
-                # Actualizar Stock Actual (Columna 3 / C)
-                sheet.update_cell(row_num, 3, nuevo_stock)
-                
-                # Calcular nuevo estado y actualizar (Columna 5 / E)
-                nuevo_estado = "🚨 BAJO" if nuevo_stock < fila['Stock Mínimo'] else "✅ OK"
-                sheet.update_cell(row_num, 5, nuevo_estado)
-                
-                st.success(f"✅ {producto_sel} actualizado!")
-                st.cache_resource.clear() # Limpiar cache para forzar recarga
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error al actualizar: {e}")
-
-# --- AGREGAR NUEVO PRODUCTO ---
-st.divider()
-st.subheader("➕ Agregar Nuevo Producto")
-with st.form("agregar"):
-    col1, col2 = st.columns(2)
-    with col1:
-        nueva_cat = st.text_input("Categoría", "Descartables y Empaques")
-        nuevo_prod = st.text_input("Nombre del Producto")
-    with col2:
-        nuevo_stock_ini = st.number_input("Stock Inicial", min_value=0, value=0)
-        nuevo_minimo = st.number_input("Stock Mínimo Alert", min_value=1, value=10)
+if not df_raw.empty:
+    # 1. MÉTRICAS RÁPIDAS (Se ven genial en celular)
+    total_prods = len(df_raw)
+    bajos = len(df_raw[df_raw['Stock Actual'] < df_raw['Stock Mínimo']])
     
-    if st.form_submit_button("Registrar Producto"):
-        if nuevo_prod:
-            try:
-                estado_ini = "🚨 BAJO" if nuevo_stock_ini < nuevo_minimo else "✅ OK"
-                sheet.append_row([nueva_cat, nuevo_prod, nuevo_stock_ini, nuevo_minimo, estado_ini])
-                st.success("¡Producto registrado con éxito!")
-                st.cache_resource.clear()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
-        else:
-            st.warning("El nombre del producto es obligatorio.")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Productos", total_prods)
+    m2.metric("Alertas Críticas", bajos, delta=-bajos, delta_color="inverse")
+    m3.metric("Último Sync", datetime.now().strftime('%H:%M'))
 
-st.sidebar.markdown(f"**Sincronizado:** {datetime.now().strftime('%H:%M:%S')}")
+    # Aplicar filtros al DF que se muestra
+    df_display = df_raw.copy()
+    if busqueda:
+        df_display = df_display[df_display['Producto'].str.contains(busqueda, case=False)]
+    if solo_bajos:
+        df_display = df_display[df_display['Stock Actual'] < df_display['Stock Mínimo']]
+
+    # 2. TABLA PRINCIPAL
+    with st.expander("Ver tabla completa", expanded=True):
+        st.dataframe(
+            df_display, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Stock Actual": st.column_config.NumberColumn(format="%d 📦"),
+                "Estado": st.column_config.TextColumn("Status")
+            }
+        )
+
+    # 3. ACCIONES EN COLUMNAS (Responsive)
+    col_a, col_b = st.columns([1, 1])
+
+    with col_a:
+        with st.container(border=True):
+            st.subheader("📝 Editar Stock")
+            prod_sel = st.selectbox("Producto", df_raw['Producto'].tolist(), key="sel_edit")
+            if prod_sel:
+                curr_stock = int(df_raw[df_raw['Producto'] == prod_sel]['Stock Actual'].values[0])
+                nuevo = st.number_input("Cantidad nueva", value=curr_stock, step=1)
+                if st.button("Actualizar", type="primary"):
+                    try:
+                        cell = sheet.find(prod_sel, in_column=2)
+                        sheet.update_cell(cell.row, 3, nuevo)
+                        # Auto-estado
+                        min_s = int(df_raw[df_raw['Producto'] == prod_sel]['Stock Mínimo'].values[0])
+                        sheet.update_cell(cell.row, 5, "🚨 BAJO" if nuevo < min_s else "✅ OK")
+                        st.success("¡Listo!")
+                        st.cache_resource.clear()
+                        st.rerun()
+                    except: st.error("Error al guardar")
+
+    with col_b:
+        with st.container(border=True):
+            st.subheader("➕ Nuevo Item")
+            with st.popover("Abrir Formulario"):
+                with st.form("new_item", clear_on_submit=True):
+                    n_cat = st.text_input("Categoría")
+                    n_prod = st.text_input("Producto")
+                    c1, c2 = st.columns(2)
+                    n_st = c1.number_input("Stock", min_value=0)
+                    n_mi = c2.number_input("Mínimo", min_value=0)
+                    if st.form_submit_button("Registrar"):
+                        if n_prod:
+                            est = "🚨 BAJO" if n_st < n_mi else "✅ OK"
+                            sheet.append_row([n_cat, n_prod, n_st, n_mi, est])
+                            st.cache_resource.clear()
+                            st.rerun()
+else:
+    st.info("Agrega tu primer producto para empezar.")
