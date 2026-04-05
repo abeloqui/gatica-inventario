@@ -12,23 +12,26 @@ st.set_page_config(
 )
 
 # CSS Personalizado para mejorar el aspecto de las tarjetas y botones
+# CSS Personalizado corregido
 st.markdown("""
     <style>
     .main {
         background-color: #f8f9fa;
     }
-    .stMetric {
+    [data-testid="stMetric"] {
         background-color: #ffffff;
         padding: 15px;
         border-radius: 10px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border: 1px solid #eee;
     }
     div.stButton > button:first-child {
         width: 100%;
         border-radius: 8px;
+        height: 3em;
     }
     </style>
-    """, unsafe_allow_status_code=True)
+    """, unsafe_allow_html=True) # <--- EL CAMBIO ESTÁ AQUÍ
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
