@@ -139,48 +139,62 @@ if not df_raw.empty:
     )
 
     # Bloques de Acción
+    # 6. BLOQUES DE ACCIÓN (Responsive)
     col_edit, col_new = st.columns(2)
 
     with col_edit:
         with st.container(border=True):
-            st.subheader("📝 Editar Stock")
+            st.subheader("📝 Gestionar Existente")
             prod_sel = st.selectbox("Elegir producto", df_raw['Producto'].tolist(), key="edit_box")
+            
             if prod_sel:
                 curr_data = df_raw[df_raw['Producto'] == prod_sel].iloc[0]
+                
+                # Formulario de edición
                 nuevo_valor = st.number_input("Nuevo Stock", value=int(curr_data['Stock Actual']), step=1)
                 
-                if st.button("Guardar Cambios", type="primary"):
+                # BOTONES DE ACCIÓN (Actualizar y Eliminar)
+                c_upd, c_del = st.columns([2, 1])
+                
+                if c_upd.button("Guardar Cambios", type="primary", use_container_width=True):
                     try:
                         cell = sheet.find(prod_sel, in_column=2)
                         sheet.update_cell(cell.row, 3, nuevo_valor)
-                        
-                        # Actualizar estado automáticamente
                         nuevo_estado = "🚨 BAJO" if nuevo_valor < curr_data['Stock Mínimo'] else "✅ OK"
                         sheet.update_cell(cell.row, 5, nuevo_estado)
-                        
-                        st.success("¡Stock actualizado!")
+                        st.success("¡Actualizado!")
                         st.cache_resource.clear()
                         st.rerun()
-                    except: st.error("Error al actualizar Google Sheets")
+                    except: st.error("Error de conexión")
+
+                # FUNCIÓN ELIMINAR CON CONFIRMACIÓN
+                with c_del.popover("🗑️"):
+                    st.warning(f"¿Eliminar '{prod_sel}'?")
+                    if st.button("Confirmar Borrado", type="secondary", help="Esta acción no se puede deshacer"):
+                        try:
+                            cell = sheet.find(prod_sel, in_column=2)
+                            sheet.delete_rows(cell.row) # Borra la fila completa en Google Sheets
+                            st.success(f"'{prod_sel}' eliminado")
+                            st.cache_resource.clear()
+                            st.rerun()
+                        except: st.error("No se pudo eliminar")
 
     with col_new:
         with st.container(border=True):
             st.subheader("➕ Nuevo Producto")
-            with st.popover("Abrir Formulario"):
+            with st.popover("Abrir Formulario", use_container_width=True):
                 with st.form("form_nuevo", clear_on_submit=True):
                     f_cat = st.text_input("Categoría", "Cocina" if sector_seleccionado == "Cocina" else "General")
                     f_prod = st.text_input("Nombre del Producto")
                     f_stock = st.number_input("Stock Inicial", min_value=0)
                     f_min = st.number_input("Stock Mínimo", min_value=1, value=10)
                     
-                    if st.form_submit_button("Registrar en " + sector_seleccionado):
+                    if st.form_submit_button("Registrar en " + sector_seleccionado, use_container_width=True):
                         if f_prod:
                             f_est = "🚨 BAJO" if f_stock < f_min else "✅ OK"
                             sheet.append_row([f_cat, f_prod, f_stock, f_min, f_est])
                             st.success("Agregado con éxito")
                             st.cache_resource.clear()
                             st.rerun()
-else:
-    st.warning(f"La hoja '{sector_seleccionado}' parece estar vacía.")
 
 st.sidebar.caption(f"Gatica Food v2.1 | {datetime.now().year}")
