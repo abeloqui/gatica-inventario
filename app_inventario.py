@@ -51,31 +51,54 @@ with st.sidebar:
         st.rerun()
 
 # 5. OBTENCIÓN DE DATOS
+# --- 5. OBTENCIÓN DE DATOS (VERSIÓN ANTIBLOQUEO) ---
 diccionario_hojas = get_all_sheets()
 if diccionario_hojas:
     sheet = diccionario_hojas[sector_seleccionado]
     try:
         values = sheet.get_all_values()
         if values and len(values) > 1:
+            # 1. Crear el DataFrame inicial
             df_raw = pd.DataFrame(values[1:], columns=[c.strip() for c in values[0]])
+            
+            # 2. ELIMINAR COLUMNAS TOTALMENTE VACÍAS (A veces gspread trae columnas fantasma)
+            df_raw = df_raw.loc[:, df_raw.columns != ""]
+            
+            # 3. TRATAR COLUMNAS DUPLICADAS (Esto evita el ValueError)
+            cols = pd.Series(df_raw.columns)
+            for i, col in enumerate(cols):
+                if (cols == col).sum() > 1:
+                    # Si el nombre está repetido, le agrega un número al final
+                    count = (cols[:i] == col).sum()
+                    if count > 0:
+                        cols[i] = f"{col}_{count}"
+            df_raw.columns = cols
+
+            # 4. Normalización de nombres para la lógica interna
             df_raw.columns = [c.replace('í', 'i').replace('ó', 'o').strip().lower() for c in df_raw.columns]
             
-            # Mapeo flexible
-            column_map = {'categoria': 'Categoría', 'producto': 'Producto', 'stock actual': 'Stock Actual', 
-                          'stock minimo': 'Stock Mínimo', 'estado': 'Estado', 'unidad': 'Unidad'}
+            # Mapeo de columnas a nombres bonitos
+            column_map = {
+                'categoria': 'Categoría', 
+                'producto': 'Producto', 
+                'stock actual': 'Stock Actual', 
+                'stock minimo': 'Stock Mínimo', 
+                'estado': 'Estado', 
+                'unidad': 'Unidad'
+            }
             df_raw = df_raw.rename(columns=column_map)
             
-            # Convertir a numérico (Float para permitir 0.5, 0.25, etc)
+            # 5. Convertir a numérico
             for col in ['Stock Actual', 'Stock Mínimo']:
                 if col in df_raw.columns:
                     df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
         else:
             df_raw = pd.DataFrame()
     except Exception as e:
-        st.error(f"Error al leer: {e}"); st.stop()
+        st.error(f"Error crítico al procesar columnas: {e}")
+        st.stop()
 else:
     st.stop()
-
 # 6. INTERFAZ
 st.title(f"📦 Inventario: {sector_seleccionado}")
 ahora = datetime.now(zona_horaria)
