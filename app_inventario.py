@@ -97,15 +97,19 @@ tab1, tab2, tab3 = st.tabs(["📋 Inventario", "🍳 Producción", "⚙️ Gesti
 with tab1:
     if busqueda: df_raw = df_raw[df_raw['Producto'].str.contains(busqueda, case=False)]
     if solo_bajos: df_raw = df_raw[df_raw['Stock Actual'] < df_raw['Stock Mínimo']]
-    
-    # Formateo de color para stock
-    def color_stock(val):
-        color = 'red' if val < 1 else 'black'
-        return f'color: {color}'
+# 1. Definimos la función de estilo de forma más segura
+    def style_stock(row):
+        # Si el stock es menor o igual al mínimo, pintamos toda la fila de rojo suave
+        # O solo el texto de la celda. Aquí lo hacemos por celda:
+        color = 'red' if row['Stock Actual'] < row['Stock Mínimo'] else 'black'
+        return [f'color: {color}'] * len(row)
 
-    st.dataframe(df_raw.style.applymap(color_stock, subset=['Stock Actual']), 
-                 use_container_width=True, hide_index=True)
-
+    # 2. Aplicamos el estilo usando .apply (que es el estándar actual)
+    st.dataframe(
+        df_raw.style.apply(style_stock, axis=1), 
+        use_container_width=True, 
+        hide_index=True
+    )
 with tab2:
     st.subheader("Transformar Materia Prima")
     st.info("Aquí puedes crear un producto final (ej: Pizza) y descontar sus ingredientes automáticamente.")
