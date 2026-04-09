@@ -7,7 +7,7 @@ import pytz
 
 # --- 0. CONFIGURACIÓN ---
 zona_horaria = pytz.timezone('America/Argentina/Buenos_Aires')
-st.set_page_config(page_title="Gatica Food - Inventario Pro", page_icon="🍕", layout="wide")
+st.set_page_config(page_title="Gatica Food - Inventario", page_icon="📦", layout="wide")
 
 # --- 2. DISEÑO CSS ---
 st.markdown("""
@@ -31,15 +31,16 @@ def get_all_sheets():
     try:
         creds = Credentials.from_service_account_info(st.secrets["gsheets"], scopes=SCOPES)
         client = gspread.authorize(creds)
+        # MANTENEMOS TU ID ORIGINAL
         spreadsheet = client.open_by_key("19M-Tn7cYH4UmuKBZHxVqZhkI7RAGsxwdq2RP8xp5JFU")
         
-        ws_general = spreadsheet.get_worksheet(0)
-        ws_cocina = spreadsheet.worksheet("Cocina")
-        
         try:
+            ws_general = spreadsheet.get_worksheet(0)
+            ws_cocina = spreadsheet.worksheet("Cocina")
             ws_recetas = spreadsheet.worksheet("Recetas")
-        except:
-            ws_recetas = None
+        except Exception as e:
+            st.error(f"Error al encontrar las hojas: {e}")
+            return None
             
         return {"General": ws_general, "Cocina": ws_cocina, "Recetas": ws_recetas}
     except Exception as e:
@@ -77,7 +78,8 @@ try:
         }
         df_raw = df_raw.rename(columns=column_map)
         for col in ['Stock Actual', 'Stock Mínimo']:
-            df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
+            if col in df_raw.columns:
+                df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
     else:
         df_raw = pd.DataFrame()
 except Exception as e:
@@ -85,19 +87,19 @@ except Exception as e:
     st.stop()
 
 # --- 6. INTERFAZ PRINCIPAL ---
-st.title(f"📦 Gestión: {sector_seleccionado}")
+st.title(f"📦 Inventario: {sector_seleccionado}")
 ahora = datetime.now(zona_horaria)
 
 if not df_raw.empty:
-    tab1, tab2, tab3 = st.tabs(["📋 Lista de Stock", "👨‍🍳 Producción y Elaborados", "⚙️ Gestión"])
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Productos", len(df_raw))
+    bajos_count = len(df_raw[df_raw['Stock Actual'] < df_raw['Stock Mínimo']])
+    m2.metric("Alertas", bajos_count, delta_color="inverse")
+    m3.metric("Hora Local", ahora.strftime('%H:%M'))
+
+    tab1, tab2, tab3 = st.tabs(["📋 Lista de Stock", "🍳 Producción", "⚙️ Gestión"])
 
     with tab1:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Productos", len(df_raw))
-        bajos_count = len(df_raw[df_raw['Stock Actual'] < df_raw['Stock Mínimo']])
-        m2.metric("Alertas", bajos_count, delta_color="inverse")
-        m3.metric("Hora Local", ahora.strftime('%H:%M'))
-        
         df_viz = df_raw.copy()
         if busqueda: 
             df_viz = df_viz[df_viz['Producto'].str.contains(busqueda, case=False)]
@@ -109,74 +111,58 @@ if not df_raw.empty:
         st.dataframe(df_viz.style.apply(color_critico, axis=1), use_container_width=True, hide_index=True)
 
     with tab2:
-        st.subheader("🍳 Elaboración de Productos")
-        st.info("Aquí puedes transformar materia prima en preelaborados (ej. Masa) o productos finales (ej. Pizza + Caja).")
-        
+        st.subheader("👨‍🍳 Transformación de Productos")
         if diccionario_hojas.get("Recetas"):
             recetas_raw = diccionario_hojas["Recetas"].get_all_values()
             if len(recetas_raw) > 1:
-                df_rec = pd.DataFrame(recetas_raw[1:], columns=[c.strip() for c in recetas_raw[0]])
-                df_rec.columns = [c.lower().strip().replace('í', 'i').replace('ó', 'o') for c in df_rec.columns]
+                df_recetas = pd.DataFrame(recetas_raw[1:], columns=[c.strip() for c in recetas_raw[0]])
+                df_recetas.columns = [c.lower().strip().replace('í', 'i').replace('ó', 'o') for c in df_recetas.columns]
                 
-                prod_final_list = df_rec['producto final'].unique()
-                col_p1, col_p2 = st.columns(2)
+                prod_final_list = df_recetas['producto final'].unique()
+                prod_a_fabricar = st.selectbox("Selecciona qué vas a elaborar", prod_final_list)
+                cant_a_fabricar = st.number_input("¿Cuántas unidades fabricarás?", min_value=1.0, value=1.0, step=1.0)
                 
-                with col_p1:
-                    prod_a_fabricar = st.selectbox("¿Qué vas a elaborar?", prod_final_list)
-                    cant_a_fabricar = st.number_input("Cantidad a producir", min_value=1.0, step=1.0)
-                
-                with col_p2:
-                    st.write("**Ingredientes necesarios:**")
-                    ingredientes = df_rec[df_rec['producto final'] == prod_a_fabricar]
-                    for _, r in ingredientes.iterrows():
-                        st.write(f"- {r['ingrediente']}: {float(r['cantidad']) * cant_a_fabricar}")
-
-                if st.button("🚀 Registrar Producción", type="primary"):
+                if st.button("Procesar Producción (Descontar Insumos)", type="primary"):
+                    ingredientes = df_recetas[df_recetas['producto final'] == prod_a_fabricar]
                     error_stock = False
-                    actualizaciones = [] # Lista de (fila, columna, nuevo_valor)
-                    
-                    # 1. Validar y preparar descuentos de ingredientes/preelaborados/descartables
+                    cambios = []
+
+                    # Validar si hay stock de todo (insumos, preelaborados o descartables)
                     for _, row_r in ingredientes.iterrows():
-                        nom_ing = row_r['ingrediente']
-                        cant_necesaria = float(row_r['cantidad']) * cant_a_fabricar
+                        ing_nombre = row_r['ingrediente']
+                        ing_cant_u = float(row_r['cantidad']) * cant_a_fabricar
                         
-                        # Buscar en la hoja actual (Cocina o General)
-                        # Nota: Si el ingrediente está en OTRA hoja, esta lógica debería expandirse
-                        if nom_ing in df_raw['Producto'].values:
-                            idx = df_raw[df_raw['Producto'] == nom_ing].index[0]
+                        if ing_nombre in df_raw['Producto'].values:
+                            idx = df_raw[df_raw['Producto'] == ing_nombre].index[0]
                             st_actual = float(df_raw.at[idx, 'Stock Actual'])
-                            
-                            if st_actual < cant_necesaria:
-                                st.error(f"Stock insuficiente de {nom_ing}. Tienes {st_actual}, necesitas {cant_necesaria}")
+                            if st_actual < ing_cant_u:
+                                st.error(f"Falta stock de: {ing_nombre}")
                                 error_stock = True
                                 break
-                            else:
-                                actualizaciones.append((idx + 2, 3, st_actual - cant_necesaria))
+                            cambios.append({'idx': idx, 'nuevo_st': st_actual - ing_cant_u})
                         else:
-                            st.warning(f"Cuidado: '{nom_ing}' no está en el inventario de {sector_seleccionado}.")
-
-                    # 2. Si todo está ok, ejecutar cambios
+                            st.warning(f"'{ing_nombre}' no está en el inventario de {sector_seleccionado}")
+                    
                     if not error_stock:
-                        # Descontar insumos
-                        for fila, col, valor in actualizaciones:
-                            sheet.update_cell(fila, col, valor)
+                        # 1. Descontar ingredientes
+                        for c in cambios:
+                            sheet.update_cell(c['idx'] + 2, 3, c['nuevo_st'])
                         
-                        # Sumar al stock del producto que acabamos de fabricar
+                        # 2. Sumar al Producto Elaborado/Final
                         if prod_a_fabricar in df_raw['Producto'].values:
                             idx_f = df_raw[df_raw['Producto'] == prod_a_fabricar].index[0]
                             nuevo_st_f = float(df_raw.at[idx_f, 'Stock Actual']) + cant_a_fabricar
                             sheet.update_cell(idx_f + 2, 3, nuevo_st_f)
                             
-                        st.success(f"¡Éxito! Se produjeron {cant_a_fabricar} unidades de {prod_a_fabricar}")
+                        st.success(f"Producción registrada: {cant_a_fabricar} {prod_a_fabricar}")
                         st.cache_resource.clear()
                         st.rerun()
             else:
-                st.warning("La hoja de Recetas está vacía.")
+                st.info("La hoja 'Recetas' está vacía.")
         else:
-            st.error("No se encontró la hoja 'Recetas'.")
+            st.warning("Crea la hoja 'Recetas' en tu Google Sheets.")
 
     with tab3:
-        # (El resto del código de Edición y Nuevo Producto se mantiene igual)
         UNIDADES = ["Unidades", "Kg", "Gramos", "Litros", "Cm3", "Pack", "Caja", "Bolsa", "Maples"]
         c_edit, c_new = st.columns(2)
         with c_edit:
@@ -206,4 +192,4 @@ if not df_raw.empty:
                             sheet.append_row([sector_seleccionado, f_pr, f_st, f_mi, est, f_un])
                             st.cache_resource.clear(); st.rerun()
 else:
-    st.info("No hay datos. Asegúrate de tener las columnas: Sector, Producto, Stock Actual, Stock Mínimo, Estado, Unidad.")
+    st.info("No hay datos disponibles.")
