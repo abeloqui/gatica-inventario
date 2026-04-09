@@ -4,180 +4,198 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime
 import pytz
-from fpdf import FPDF
-import io
 
 # --- 0. CONFIGURACIÓN ---
 zona_horaria = pytz.timezone('America/Argentina/Buenos_Aires')
-st.set_page_config(page_title="Gatica Food - Sistema Pro", page_icon="🍔", layout="wide")
+st.set_page_config(page_title="Gatica Food - Inventario", page_icon="📦", layout="wide")
 
-# --- 1. CLASE PDF PARA TICKETS Y REPORTES ---
-class GaticaPDF(FPDF):
-    def header(self):
-        self.set_font("Arial", 'B', 14)
-        self.cell(0, 10, "GATICA FOOD", ln=True, align='C')
-        self.set_font("Arial", '', 9)
-        self.cell(0, 5, "Gestión de Inventario y Ventas", ln=True, align='C')
-        self.ln(5)
+# --- 2. DISEÑO CSS ---
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    [data-testid="stMetric"] {
+        background-color: #ffffff !important;
+        padding: 15px !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
+    }
+    div.stButton > button:first-child { width: 100%; border-radius: 10px; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
-def generar_pdf_ticket(items, total, metodo, nro="0001"):
-    pdf = GaticaPDF(orientation='P', unit='mm', format=(80, 150))
-    pdf.add_page()
-    ahora = datetime.now(zona_horaria)
-    
-    # Resaltado de Fecha y Hora
-    pdf.set_fill_color(240, 240, 240)
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(0, 8, f"{ahora.strftime('%d/%m/%Y')} | {ahora.strftime('%H:%M:%S')}", ln=True, align='C', fill=True)
-    pdf.ln(3)
-
-    pdf.set_font("Arial", '', 9)
-    pdf.cell(0, 5, f"Ticket: {nro}", ln=True)
-    pdf.cell(0, 5, f"Pago: {metodo}", ln=True)
-    pdf.cell(0, 2, "-"*40, ln=True)
-
-    # Detalle de productos
-    pdf.set_font("Arial", 'B', 9)
-    pdf.cell(35, 6, "Item", 0)
-    pdf.cell(10, 6, "Cant", 0)
-    pdf.cell(25, 6, "Total", ln=True, align='R')
-    
-    pdf.set_font("Arial", '', 9)
-    for item in items:
-        pdf.cell(35, 6, str(item['nombre'])[:18], 0)
-        pdf.cell(10, 6, str(item['cant']), 0)
-        pdf.cell(25, 6, f"${item['subtotal']:.2f}", ln=True, align='R')
-
-    pdf.ln(4)
-    pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 10, f"TOTAL: ${total:.2f}", border='T', ln=True, align='R')
-    return pdf.output()
-
-# --- 2. CONEXIÓN A GOOGLE SHEETS ---
+# --- 3. CONEXIÓN ---
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 @st.cache_resource
-def conectar_google_sheets():
+def get_all_sheets():
     try:
         creds = Credentials.from_service_account_info(st.secrets["gsheets"], scopes=SCOPES)
         client = gspread.authorize(creds)
-        # ID de tu hoja basado en tu historial
         spreadsheet = client.open_by_key("19M-Tn7cYH4UmuKBZHxVqZhkI7RAGsxwdq2RP8xp5JFU")
-        return spreadsheet
+        
+        # Intentamos obtener las hojas necesarias
+        try:
+            ws_general = spreadsheet.get_worksheet(0)
+            ws_cocina = spreadsheet.worksheet("Cocina")
+        except:
+            st.error("No se encontraron las hojas 'General' o 'Cocina'.")
+            return None
+            
+        try:
+            ws_recetas = spreadsheet.worksheet("Recetas")
+        except:
+            ws_recetas = None # Opcional
+            
+        return {"General": ws_general, "Cocina": ws_cocina, "Recetas": ws_recetas}
     except Exception as e:
-        st.error(f"Error crítico de conexión: {e}")
+        st.error(f"Error de conexión: {e}")
         return None
 
-def obtener_hoja_segura(ss, nombre_hoja):
-    try:
-        return ss.worksheet(nombre_hoja)
-    except:
-        st.error(f"⚠️ No se encontró la pestaña '{nombre_hoja}'. Revisa el nombre en Google Sheets.")
-        return None
+# --- 4. PANEL LATERAL ---
+with st.sidebar:
+    st.title("🍔 Gatica Food")
+    sector_seleccionado = st.selectbox("Seleccionar Sector", ["General", "Cocina"])
+    st.divider()
+    busqueda = st.text_input("🔍 Buscar Producto", "")
+    solo_bajos = st.toggle("🚨 Solo alertas críticas", value=False)
+    if st.button("🔄 Refrescar Datos"):
+        st.cache_resource.clear()
+        st.rerun()
 
-def leer_datos_dataframe(ws):
-    if ws is None: return pd.DataFrame()
-    try:
-        # Leemos todo y limpiamos nombres de columnas
-        records = ws.get_all_records()
-        if not records:
-            return pd.DataFrame()
-        df = pd.DataFrame(records)
-        # Limpieza de espacios en nombres de columnas y datos de texto
-        df.columns = [str(c).strip() for c in df.columns]
-        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
-        return df
-    except Exception as e:
-        st.error(f"Error al procesar datos: {e}")
-        return pd.DataFrame()
+# --- 5. PROCESAMIENTO DE DATOS ---
+diccionario_hojas = get_all_sheets()
+if not diccionario_hojas:
+    st.stop()
 
-# --- 3. LOGICA PRINCIPAL ---
-ss = conectar_google_sheets()
-if not ss: st.stop()
-
-st.sidebar.title("🍔 Gatica Food")
-menu = st.sidebar.radio("Navegación", ["📦 Inventario", "💰 Nueva Venta", "📊 Cierre de Caja"])
-
-# --- SECCIÓN: INVENTARIO ---
-if menu == "📦 Inventario":
-    st.title("📦 Control de Stock")
-    sector_nombre = st.sidebar.selectbox("Seleccionar Sector", ["General", "Cocina"])
-    ws_inv = obtener_hoja_segura(ss, sector_nombre)
-    df_inv = leer_datos_dataframe(ws_inv)
-    
-    if not df_inv.empty:
-        # Formateo visual
-        st.dataframe(df_inv, use_container_width=True, hide_index=True)
+sheet = diccionario_hojas[sector_seleccionado]
+try:
+    values = sheet.get_all_values()
+    if values and len(values) > 1:
+        # Normalización de DataFrame principal
+        df_raw = pd.DataFrame(values[1:], columns=[c.strip() for c in values[0]])
+        df_raw = df_raw.loc[:, df_raw.columns != ""]
+        df_raw.columns = [c.replace('í', 'i').replace('ó', 'o').strip().lower() for c in df_raw.columns]
+        
+        column_map = {
+            'categoria': 'Categoría', 'producto': 'Producto', 
+            'stock actual': 'Stock Actual', 'stock minimo': 'Stock Mínimo', 
+            'estado': 'Estado', 'unidad': 'Unidad'
+        }
+        df_raw = df_raw.rename(columns=column_map)
+        
+        # Convertir a numérico de forma segura
+        for col in ['Stock Actual', 'Stock Mínimo']:
+            if col in df_raw.columns:
+                df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
     else:
-        st.info(f"La hoja '{sector_nombre}' está conectada pero no tiene datos o falta el encabezado.")
+        df_raw = pd.DataFrame()
+except Exception as e:
+    st.error(f"Error al procesar la hoja: {e}")
+    st.stop()
 
-# --- SECCIÓN: VENTAS ---
-elif menu == "💰 Nueva Venta":
-    st.title("💰 Punto de Venta")
-    
-    # Consolidamos productos de ambos sectores para vender
-    df_c = leer_datos_dataframe(obtener_hoja_segura(ss, "Cocina"))
-    df_g = leer_datos_dataframe(obtener_hoja_segura(ss, "General"))
-    df_todo = pd.concat([df_c, df_g]).drop_duplicates(subset=['Producto']) if not (df_c.empty and df_g.empty) else pd.DataFrame()
+# --- 6. INTERFAZ PRINCIPAL ---
+st.title(f"📦 Inventario: {sector_seleccionado}")
+ahora = datetime.now(zona_horaria)
 
-    if not df_todo.empty:
-        with st.form("form_venta"):
-            c1, c2 = st.columns(2)
-            with c1:
-                producto_v = st.selectbox("Producto", df_todo['Producto'].unique())
-                cantidad_v = st.number_input("Cantidad", min_value=1.0, step=1.0, value=1.0)
-            with c2:
-                precio_v = st.number_input("Precio Unitario ($)", min_value=0.0, step=50.0)
-                metodo_v = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Tarjeta"])
-            
-            total_v = cantidad_v * precio_v
-            st.markdown(f"### TOTAL A COBRAR: **${total_v:.2f}**")
-            
-            if st.form_submit_button("✅ Finalizar y Generar Ticket"):
-                ahora = datetime.now(zona_horaria)
-                ws_ventas = obtener_hoja_segura(ss, "Ventas")
+if not df_raw.empty:
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Productos", len(df_raw))
+    bajos_count = len(df_raw[df_raw['Stock Actual'] < df_raw['Stock Mínimo']])
+    m2.metric("Alertas", bajos_count, delta=-bajos_count, delta_color="inverse")
+    m3.metric("Hora Local", ahora.strftime('%H:%M'))
+
+    tab1, tab2, tab3 = st.tabs(["📋 Lista de Stock", "🍳 Producción", "⚙️ Gestión"])
+
+    with tab1:
+        # Aplicar filtros
+        df_viz = df_raw.copy()
+        if busqueda: 
+            df_viz = df_viz[df_viz['Producto'].str.contains(busqueda, case=False)]
+        if solo_bajos: 
+            df_viz = df_viz[df_viz['Stock Actual'] < df_viz['Stock Mínimo']]
+        
+        # Estilo de color (Reemplazo de applymap por map/apply para evitar AttributeError)
+        def color_critico(row):
+            return ['color: red' if row['Stock Actual'] < row['Stock Mínimo'] else 'color: black'] * len(row)
+
+        st.dataframe(df_viz.style.apply(color_critico, axis=1), use_container_width=True, hide_index=True)
+
+    with tab2:
+        st.subheader("👨‍🍳 Transformación de Productos")
+        if diccionario_hojas.get("Recetas"):
+            recetas_raw = diccionario_hojas["Recetas"].get_all_values()
+            if len(recetas_raw) > 1:
+                df_recetas = pd.DataFrame(recetas_raw[1:], columns=[c.strip() for c in recetas_raw[0]])
+                df_recetas.columns = [c.lower().strip().replace('í', 'i').replace('ó', 'o') for c in df_recetas.columns]
                 
-                if ws_ventas:
-                    # Guardar en Sheets
-                    ws_ventas.append_row([
-                        ahora.strftime('%d/%m/%Y'), 
-                        ahora.strftime('%H:%M'), 
-                        producto_v, cantidad_v, total_v, metodo_v
-                    ])
+                # Columnas esperadas: 'producto final', 'ingrediente', 'cantidad'
+                if 'producto final' in df_recetas.columns:
+                    prod_final_list = df_recetas['producto final'].unique()
+                    prod_a_fabricar = st.selectbox("Selecciona qué vas a elaborar", prod_final_list)
+                    cant_a_fabricar = st.number_input("¿Cuántas unidades fabricarás?", min_value=0.1, value=1.0, step=1.0)
                     
-                    # Generar Ticket
-                    item_ticket = [{'nombre': producto_v, 'cant': cantidad_v, 'subtotal': total_v}]
-                    pdf_bytes = generar_pdf_ticket(item_ticket, total_v, metodo_v)
-                    
-                    st.success("¡Venta registrada!")
-                    st.download_button("📥 Descargar Ticket", data=bytes(pdf_bytes), 
-                                     file_name=f"ticket_{ahora.strftime('%H%M%S')}.pdf", mime="application/pdf")
-    else:
-        st.error("No se encontraron productos en 'Cocina' o 'General'. Carga el inventario primero.")
-
-# --- SECCIÓN: CIERRE DE CAJA ---
-elif menu == "📊 Cierre de Caja":
-    st.title("📊 Reporte de Cierre")
-    ws_v = obtener_hoja_segura(ss, "Ventas")
-    df_v = leer_datos_dataframe(ws_v)
-    
-    if not df_v.empty:
-        hoy = datetime.now(zona_horaria).strftime('%d/%m/%Y')
-        if 'Fecha' in df_v.columns:
-            df_hoy = df_v[df_v['Fecha'] == hoy]
-            if not df_hoy.empty:
-                st.subheader(f"Ventas realizadas hoy ({hoy})")
-                st.table(df_hoy)
-                
-                total_hoy = df_hoy['Total'].sum()
-                st.metric("Recaudación Total", f"${total_hoy:.2f}")
-                
-                # Desglose por método
-                st.write("**Resumen por medio de pago:**")
-                st.write(df_hoy.groupby('Metodo')['Total'].sum())
+                    if st.button("Procesar Producción (Descontar Insumos)", type="primary"):
+                        ingredientes = df_recetas[df_recetas['producto final'] == prod_a_fabricar]
+                        
+                        # 1. Descontar Ingredientes
+                        for _, row_receta in ingredientes.iterrows():
+                            ing_nombre = row_receta['ingrediente']
+                            ing_cant_u = float(row_receta['cantidad']) * cant_a_fabricar
+                            
+                            if ing_nombre in df_raw['Producto'].values:
+                                idx = df_raw[df_raw['Producto'] == ing_nombre].index[0]
+                                nuevo_st = float(df_raw.at[idx, 'Stock Actual']) - ing_cant_u
+                                sheet.update_cell(idx + 2, 3, nuevo_st) # Columna 3 = Stock Actual
+                            else:
+                                st.warning(f"No se encontró el ingrediente '{ing_nombre}' en {sector_seleccionado}")
+                        
+                        # 2. Sumar al Producto Final
+                        if prod_a_fabricar in df_raw['Producto'].values:
+                            idx_f = df_raw[df_raw['Producto'] == prod_a_fabricar].index[0]
+                            nuevo_st_f = float(df_raw.at[idx_f, 'Stock Actual']) + cant_a_fabricar
+                            sheet.update_cell(idx_f + 2, 3, nuevo_st_f)
+                        
+                        st.success(f"Se fabricó {cant_a_fabricar} de {prod_a_fabricar}. Insumos descontados.")
+                        st.cache_resource.clear()
+                        st.rerun()
             else:
-                st.info("No hay ventas registradas con la fecha de hoy.")
+                st.info("La hoja 'Recetas' está vacía.")
         else:
-            st.error("La hoja 'Ventas' no tiene una columna llamada 'Fecha'.")
-    else:
-        st.info("No hay historial de ventas disponible.")
+            st.warning("Para usar esto, crea una pestaña llamada 'Recetas' con: Producto Final, Ingrediente, Cantidad.")
+
+    with tab3:
+        UNIDADES = ["Unidades", "Kg", "Gramos", "Litros", "Cm3", "Pack", "Caja", "Bolsa", "Maples"]
+        c_edit, c_new = st.columns(2)
+
+        with c_edit:
+            with st.container(border=True):
+                st.subheader("📝 Editar Stock")
+                prod_sel = st.selectbox("Producto", df_raw['Producto'].tolist(), key="edit_sel")
+                if prod_sel:
+                    curr = df_raw[df_raw['Producto'] == prod_sel].iloc[0]
+                    idx_fila = df_raw[df_raw['Producto'] == prod_sel].index[0] + 2
+                    
+                    v_st = st.number_input("Stock Actual", value=float(curr['Stock Actual']), step=0.5)
+                    v_mi = st.number_input("Mínimo", value=float(curr['Stock Mínimo']), step=0.5)
+                    
+                    if st.button("Guardar Cambios"):
+                        est = "🚨 BAJO" if v_st < v_mi else "✅ OK"
+                        # Actualiza C(3), D(4), E(5) -> Stock, Min, Estado
+                        sheet.update(range_name=f'C{idx_fila}:E{idx_fila}', values=[[v_st, v_mi, est]])
+                        st.cache_resource.clear(); st.rerun()
+
+        with c_new:
+            with st.container(border=True):
+                st.subheader("➕ Nuevo Producto")
+                with st.form("form_nuevo"):
+                    f_pr = st.text_input("Nombre del Producto")
+                    f_un = st.selectbox("Unidad", UNIDADES)
+                    f_st = st.number_input("Stock Inicial", min_value=0.0)
+                    f_mi = st.number_input("Mínimo", min_value=0.1, value=1.0)
+                    if st.form_submit_button("Agregar al Inventario"):
+                        if f_pr:
+                            est = "🚨 BAJO" if f_st < f_mi else "✅ OK"
+                            sheet.append_row([sector_seleccionado, f_pr, f_st, f_mi, est, f_un])
+                            st.cache_resource.clear(); st.rerun()
+else:
+    st.info("No hay datos disponibles. Verifica tu Google Sheets.")
